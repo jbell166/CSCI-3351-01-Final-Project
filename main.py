@@ -28,7 +28,8 @@ sqliteCursor.execute(""" CREATE TABLE IF NOT EXISTS events (
                          eventDate TEXT,
                          eventTime TEXT,
                          eventStatus TEXT DEFAULT 'Pending',
-                         eventNotification INTEGER DEFAULT 0 )""")
+                         eventNotification INTEGER DEFAULT 0,
+                         repID INTEGER DEFAULT NULL )""")
 
 userCalendar.commit()  # "Commits" the created events table to the .db file connected at userCalendar (yes, like Github)
 db_lock = threading.Lock()  # Prevents two threads from writing to the .db file at the same time (This is usually enabled, but was disabled when check_same_thread was made False)
@@ -172,31 +173,38 @@ def viewCalendar():
 # ==============================================================================================================
 # ==============================================================================================================
 # ==============================================================================================================
-def buildPracticeItinerary():
+def buildPracticeItinerary(target_piece):
     today = datetime.now().date()
     scored_pieces = []
 
-    for piece in repertoireList:
+    # Prioritize the selected piece, plus any other pieces sharing that same concert (date + ensemble)
+    concert_pieces = [
+        p for p in repertoireList
+        if p.performanceDate == target_piece.performanceDate and p.ensemble.strip().lower() == target_piece.ensemble.strip().lower()
+    ]
+    if not concert_pieces:
+        concert_pieces = [target_piece]
+
+    for piece in concert_pieces:
         try:
             perf_dt = datetime.strptime(piece.performanceDate, "%Y-%m-%d").date()
             days_left = max(1, (perf_dt - today).days)
         except ValueError:
-            days_left = 30  # Fallback if date format varies
+            days_left = 30
 
-        # Higher grade and closer performance date = higher study priority
         tempPriority = float(piece.grade) / days_left
         tempPriority1 = (1 - (float(piece.grade) / 2) * 0.1) ** piece.numberOfPractices
         priority = tempPriority * tempPriority1
+
+        # Give a slight boost to the specific piece the user selected
+        if piece.repID == target_piece.repID:
+            priority *= 1.25
+
         scored_pieces.append((priority, piece))
 
-    # Sort highest priority first and pick top 2 to 3 pieces
     scored_pieces.sort(key=lambda x: x[0], reverse=True)
     selected = [p for _, p in scored_pieces[:3]]
 
-    if not selected:
-        return "5 mins Warm-up | 50 mins Free Practice / Scales | 5 mins Warm-down"
-
-    # Calculate time allocation inside a 60 min session
     total_minutes = 60
     warmup = 5
     warmdown = 5
@@ -204,39 +212,68 @@ def buildPracticeItinerary():
     total_breaks = break_time * (len(selected) - 1)
     available_study_mins = total_minutes - warmup - warmdown - total_breaks
 
-    # Weight study minutes by piece grade
     total_grade_weight = sum(float(p.grade) for p in selected)
     raw_allocations = []
     for p in selected:
         mins = max(10, int(round((float(p.grade) / total_grade_weight) * available_study_mins)))
         raw_allocations.append(mins)
 
-    # Adjust rounding difference on the highest-priority piece so total equals exactly 60 mins
     diff = available_study_mins - sum(raw_allocations)
-    raw_allocations[0] += diff
+    raw_allocations += diff
 
-    # Format itinerary lines
     steps = [f"  - {warmup} mins: Warm-up"]
     for idx, (piece, mins) in enumerate(zip(selected, raw_allocations)):
-        steps.append(f"  - {mins} mins: '{piece.title}' (Grade {piece.grade}, Perf: {piece.performanceDate})")
+        steps.append(f"  - {mins} mins: '{piece.title}' [Rep ID #{piece.repID}] (Grade {piece.grade}, Perf: {piece.performanceDate})")
         if idx < len(selected) - 1:
             steps.append(f"  - {break_time} mins: Short Break")
     steps.append(f"  - {warmdown} mins: Warm-down")
 
-    for pieces in selected:
-        pieces.numberOfPractices = pieces.numberOfPractices + 1
+    for piece in selected:
+        piece.numberOfPractices += 1
+
     return "\n".join(steps)
 
 
 def generatePracticeSession():
+    if not repertoireList:
+        print("\nNo repertoire pieces found! Add a piece in 'Modify Repertoire' first.")
+        return
+
+    # 1. Ask which specific repertoire/performance to practice for
+    print("\n--- Select a Performance / Piece to Practice For ---")
+    for piece in repertoireList:
+        print(f"ID #{piece.repID}: '{piece.title}' ({piece.ensemble}) - Performance Date: {piece.performanceDate}")
+
+    try:
+        chosen_rep_id = int(input("\nEnter the Repertoire ID # you are practicing for: "))
+    except ValueError:
+        print("Invalid ID. Returning to Practice Menu...")
+        return
+
+    target_piece = next((p for p in repertoireList if p.repID == chosen_rep_id), None)
+    if not target_piece:
+        print(f"No repertoire found with ID #{chosen_rep_id}.")
+        return
+
+    # 2. Cap candidate dates before specific piece's performance date
     today = datetime.now().date()
-    perf_dates = {piece.performanceDate for piece in repertoireList}
+    try:
+        target_perf_date = datetime.strptime(target_piece.performanceDate, "%Y-%m-%d").date()
+    except ValueError:
+        print("Error: Invalid performance date format on this piece.")
+        return
+
+    days_until_perf = (target_perf_date - today).days
+    if days_until_perf <= 1:
+        print("\nThere are no days left before the performance. Either reenter the performance to see suggestions again or manually enter practices that work better for you.")
+        return
+
+    all_perf_dates = {piece.performanceDate for piece in repertoireList}
 
     with db_lock:
         sqliteCursor.execute("SELECT eventDate, eventTime, eventType FROM events")
         all_events = sqliteCursor.fetchall()
 
-    # Map existing times and rehearsal counts per date
     times_by_date = {}
     rehearsal_count = {}
     for edate, etime, etype in all_events:
@@ -244,16 +281,15 @@ def generatePracticeSession():
         if etype == 'R':
             rehearsal_count[edate] = rehearsal_count.get(edate, 0) + 1
 
-    # Evaluate next 21 days starting tomorrow
+    # 3. Scan only days between tomorrow and target_perf_date
     candidate_days = []
-    for offset in range(1, 22):
+    for offset in range(1, days_until_perf):
         cand_date = (today + timedelta(days=offset)).strftime("%Y-%m-%d")
-        has_perf = 1 if cand_date in perf_dates else 0
+        has_perf = 1 if cand_date in all_perf_dates else 0
         num_rehearsals = rehearsal_count.get(cand_date, 0)
         total_events = len(times_by_date.get(cand_date, set()))
 
-        # Find first available 1 hr block between 09:00 and 20:00
-        booked_hours = {t.split(":")[0] for t in times_by_date.get(cand_date, set())}
+        booked_hours = {t.split(":") for t in times_by_date.get(cand_date, set())}
         open_hour = None
         for hr in range(9, 21):
             hr_str = f"{hr:02d}"
@@ -262,35 +298,35 @@ def generatePracticeSession():
                 break
 
         if open_hour:
-            # Sort key prioritizes: 0 performances -> fewest rehearsals -> fewest total events -> earliest date
             sort_key = (has_perf, num_rehearsals, total_events, offset)
             candidate_days.append((sort_key, cand_date, open_hour, has_perf, num_rehearsals))
 
-    candidate_days.sort(key=lambda x: x[0])
+    candidate_days.sort(key=lambda x: x)
 
     if not candidate_days:
-        print("\nNo open 1-hour blocks found over the next 3 weeks!")
+        print("\nThere are no days left before the performance. Either reenter the performance to see suggestions again or manually enter practices that work better for you.")
         return
 
-    # Loop through suggestions until user books one or declines further suggestions
+    # 4. Suggest slots up to this specific performance date
     for _, sugg_date, sugg_time, has_perf, num_reh in candidate_days:
         end_hour = f"{int(sugg_time[:2]) + 1:02d}:00"
         status_note = "No rehearsals or performances" if (has_perf == 0 and num_reh == 0) else f"{num_reh} rehearsal(s), {has_perf} performance(s)"
 
-        print(f"\nSuggested Practice Slot: {sugg_date} from {sugg_time} to {end_hour} ({status_note})")
+        print(f"\nSuggested Practice Slot for '{target_piece.title}' (Perf: {target_piece.performanceDate}):")
+        print(f"  -> {sugg_date} from {sugg_time} to {end_hour} ({status_note})")
         book_choice = input("Would you like to book this session? (Y/N): ").upper()
 
         if book_choice == 'Y':
-            itinerary = buildPracticeItinerary()
+            itinerary = buildPracticeItinerary(target_piece)
             with db_lock:
                 sqliteCursor.execute(
-                    "INSERT INTO events (eventType, organizerName, eventDate, eventTime, eventStatus) VALUES (?, ?, ?, ?, ?)",
-                    ("Pra", itinerary, sugg_date, sugg_time, "Confirmed")
+                    "INSERT INTO events (eventType, organizerName, eventDate, eventTime, eventStatus, repID) VALUES (?, ?, ?, ?, ?, ?)",
+                    ("Pra", itinerary, sugg_date, sugg_time, "Confirmed", target_piece.repID)
                 )
                 userCalendar.commit()
                 practice_id = sqliteCursor.lastrowid
 
-            print(f"\n-----< Practice Session Confirmed (Practice ID: {practice_id}) >-----")
+            print(f"\n-----< Practice Session Confirmed (Practice ID: {practice_id} | Linked Rep ID: #{target_piece.repID}) >-----")
             print(f"Date & Time: {sugg_date} | {sugg_time} - {end_hour}")
             print("Itinerary:")
             print(itinerary)
@@ -301,7 +337,7 @@ def generatePracticeSession():
                 print("Returning to Practice Menu...")
                 return
 
-    print("\nNo more candidate dates available.")
+    print("\nThere are no days left before the performance. Either reenter the performance to see suggestions again or manually enter practices that work better for you.")
 
 
 def practiceMenu():
@@ -534,17 +570,17 @@ def repertoireMenu():
             repertoireList.append(tempRepertoire)
             print("Piece added and saved to calendar!")
 
+
         elif repertoireMenuChoice.upper() == 'D':
             if not repertoireList:
                 print("\nNo repertoire pieces to delete.")
                 continue
-
             print("\n")
+
             for index, piece in enumerate(repertoireList):
                 print(f"{index + 1}.")
                 piece.print()
                 print("\n")
-
             deleted = False
             while not deleted:
                 toBeDeleted = input("Which piece would you like to delete? ")
@@ -554,12 +590,17 @@ def repertoireMenu():
                         print("That is not a valid choice.")
                     else:
                         removed_piece = repertoireList.pop(idx)
-                        # Remove from SQLite as well
                         with db_lock:
+                            # 1. Delete the repertoire piece from the repertoire table
                             sqliteCursor.execute("DELETE FROM repertoire WHERE repID = ?", (removed_piece.repID,))
+                            # 2. Delete all practice sessions linked to this repertoire piece
+                            sqliteCursor.execute("DELETE FROM events WHERE repID = ? AND eventType = 'Pra'",
+                                                 (removed_piece.repID,))
+                            deleted_practices = sqliteCursor.rowcount
                             userCalendar.commit()
                         deleted = True
-                        print("Piece successfully deleted!")
+                        print(
+                            f"Piece successfully deleted (along with {deleted_practices} linked practice session(s))!")
                 except ValueError:
                     print("Please enter a valid number.")
 
