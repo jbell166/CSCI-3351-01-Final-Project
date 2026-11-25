@@ -52,9 +52,10 @@ class Repertoire:
         self.grade = grade
         self.ensemble = ensemble
         self.performanceDate = performanceDate
+        self.numberOfPractices = 0
 
     def print(self):
-        print("---< ", self.title, " >---")
+        print("-----< ", self.title, " >-----")
         print("By ", self.composer)
         print("Grade: ", self.grade)
         print("Being performed on ", self.performanceDate, " by ", self.ensemble)
@@ -167,7 +168,7 @@ def viewCalendar():
 
             print(border_line)
 
-    print("E: Miscellaneous Event | R: Rehearsal | Pra: Practice Session | Per: Performance")
+    print("-----< E: Miscellaneous Event | R: Rehearsal | Pra: Practice Session | Per: Performance >-----")
 # ==============================================================================================================
 # ==============================================================================================================
 # ==============================================================================================================
@@ -183,7 +184,9 @@ def buildPracticeItinerary():
             days_left = 30  # Fallback if date format varies
 
         # Higher grade and closer performance date = higher study priority
-        priority = float(piece.grade) / days_left
+        tempPriority = float(piece.grade) / days_left
+        tempPriority1 = (1 - (float(piece.grade) / 2) * 0.1) ** piece.numberOfPractices
+        priority = tempPriority * tempPriority1
         scored_pieces.append((priority, piece))
 
     # Sort highest priority first and pick top 2 to 3 pieces
@@ -220,6 +223,8 @@ def buildPracticeItinerary():
             steps.append(f"  - {break_time} mins: Short Break")
     steps.append(f"  - {warmdown} mins: Warm-down")
 
+    for pieces in selected:
+        pieces.numberOfPractices = pieces.numberOfPractices + 1
     return "\n".join(steps)
 
 
@@ -285,11 +290,10 @@ def generatePracticeSession():
                 userCalendar.commit()
                 practice_id = sqliteCursor.lastrowid
 
-            print(f"\n===== Practice Session Confirmed (Practice ID: {practice_id}) =====")
+            print(f"\n-----< Practice Session Confirmed (Practice ID: {practice_id}) >-----")
             print(f"Date & Time: {sugg_date} | {sugg_time} - {end_hour}")
             print("Itinerary:")
             print(itinerary)
-            print("==================================================================")
             return
         else:
             next_choice = input("Would you like a new date suggested? (Y/N): ").upper()
@@ -327,11 +331,10 @@ def practiceMenu():
             else:
                 pid, pdate, ptime, itinerary = session
                 end_hour = f"{int(ptime[:2]) + 1:02d}:00"
-                print(f"\n===== Practice Session #{pid} =====")
+                print(f"\n-----< Practice Session #{pid} >-----")
                 print(f"Date & Time: {pdate} | {ptime} - {end_hour}")
                 print("Itinerary:")
                 print(itinerary)
-                print("==================================")
 
         elif practiceMenuChoice.upper() == 'D':
             target_id = input("\nEnter the Practice Session ID you would like to delete: ")
@@ -347,7 +350,7 @@ def practiceMenu():
             else:
                 pid, pdate, ptime, itinerary = session
                 end_hour = f"{int(ptime[:2]) + 1:02d}:00"
-                print(f"\n--- Practice Session #{pid} ---")
+                print(f"\n-----< Practice Session #{pid} >-----")
                 print(f"Date & Time: {pdate} | {ptime} - {end_hour}")
                 print("Itinerary:")
                 print(itinerary)
@@ -434,7 +437,7 @@ def eventMenu():
             print("\n")
             for index, (eid, etype, name, edate, etime) in enumerate(rows):
                 tag = "Rehearsal" if etype == 'R' else "Event"
-                print(f"{index + 1}. ---< {tag}: {name} >---")
+                print(f"{index + 1}. -----< {tag}: {name} >-----")
                 print(f"   Date: {edate} at {etime}\n")
 
             deleted = False
@@ -467,7 +470,7 @@ def eventMenu():
             else:
                 for etype, name, edate, etime in rows:
                     tag = "Rehearsal" if etype == 'R' else "Miscellaneous Event"
-                    print(f"\n---< {tag}: {name} >---")
+                    print(f"\n-----< {tag}: {name} >-----")
                     print(f"Date: {edate}")
                     print(f"Time: {etime}")
 
@@ -529,7 +532,7 @@ def repertoireMenu():
 
             tempRepertoire = Repertoire(tempTitle, tempComposer, float(tempGrade), tempEnsemble, tempPerformanceDate, new_id)
             repertoireList.append(tempRepertoire)
-            print("Piece added and saved permanently to calendar!")
+            print("Piece added and saved to calendar!")
 
         elif repertoireMenuChoice.upper() == 'D':
             if not repertoireList:
@@ -594,10 +597,8 @@ while menuLoop:
     elif menuChoice.upper() == 'R':
         repertoireMenu()
     elif menuChoice.upper() == 'Q':
-        print("i dont wanna be in the musical practice tracker anymore!")
+        print("-----< Thank you for using the Musical Practice Tracker >-----")
         menuLoop = False
     else:
         print("Invalid Character")
-
-print("much better")
 # ==============================================================================================================
