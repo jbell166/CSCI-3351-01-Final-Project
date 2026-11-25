@@ -42,8 +42,7 @@ sqliteCursor.execute(""" CREATE TABLE IF NOT EXISTS repertoire (
                          ensemble TEXT,
                          performanceDate TEXT )""")
 userCalendar.commit()
-
-
+# ==============================================================================================================
 class Repertoire:
     def __init__(self, title, composer, grade, ensemble, performanceDate, repID=None):
         self.repID = repID
@@ -58,23 +57,10 @@ class Repertoire:
         print("By ", self.composer)
         print("Grade: ", self.grade)
         print("Being performed on ", self.performanceDate, " by ", self.ensemble)
-
-
 repertoireList = []
-
-
-def loadRepertoire():
-    repertoireList.clear()
-    with db_lock:
-        sqliteCursor.execute("SELECT repID, title, composer, grade, ensemble, performanceDate FROM repertoire")
-        for repID, title, composer, grade, ensemble, perfDate in sqliteCursor.fetchall():
-            repertoireList.append(Repertoire(title, composer, grade, ensemble, perfDate, repID))
-
-
-# Load saved pieces immediately when the program starts
-loadRepertoire()
-
-
+# ==============================================================================================================
+# ==============================================================================================================
+# ==============================================================================================================
 # ==============================================================================================================
 def viewCalendar():
     with db_lock:
@@ -106,7 +92,7 @@ def viewCalendar():
         try:
             dt = datetime.strptime(piece.performanceDate, "%Y-%m-%d")
             months_to_show.add((dt.year, dt.month))
-            entry = f"[PERF] {piece.title[:9]}"
+            entry = f"Per: {piece.ensemble[:9]}"
             items_by_date.setdefault(piece.performanceDate, []).append(entry)
         except ValueError:
             pass
@@ -160,16 +146,15 @@ def viewCalendar():
 
             print(border_line)
 
-    print("Legend: (P) = Pending Event | (C) = Confirmed Event | [PERF] = Repertoire Performance")
-
-
+    print("E: Miscellaneous Event | R: Rehearsal | Pra: Practice Session | Per: Performance") #Events/Rehearsals/Performances have to match the key here
+# ==============================================================================================================
+# ==============================================================================================================
 # ==============================================================================================================
 def practiceMenu():
     practiceMenuLoop = True
     while practiceMenuLoop:
         print("\n-----< Create Practice Session >-----")
-        print(
-            "G: Generate a Practice Session")  # This wording WILL change. I REFUSE to use the word generate in AI class (unless it'll give me brownie points with supar? hmm?)
+        print("G: Generate a Practice Session")  # This wording WILL change. I REFUSE to use the word generate in AI class (unless it'll give me brownie points with supar? hmm?)
         print("D: Delete a Practice Session")
         print("V: View a Practice Session")
         print("M: Return to Menu")
